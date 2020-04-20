@@ -203,7 +203,36 @@ def batchnorm_forward(x, gamma, beta, bn_param):
         #######################################################################
         # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-        pass
+        # https://kratzert.github.io/2016/02/12/understanding-the-gradient-flow-through-the-batch-normalization-layer.html
+        
+        #step1: calculate mean
+        batch_mean = x.mean(axis=0)
+        
+        #step2: subtract mean vector of every trainings example
+        x_zero_center = x - batch_mean     
+
+        #step3: calculate variance
+        batch_var = x.var(axis=0)
+
+        #step4: add eps for numerical stability, then sqrt
+        batch_std = np.sqrt(batch_var + eps)
+
+        #step5: invert batch_std
+        inv_batch_std = 1./batch_std
+
+        #step6: execute normalization
+        xhat = x_zero_center * inv_batch_std
+
+        #step7: scale and shift the normalized data using gamma and beta
+        out = gamma * xhat + beta
+
+        #store intermediate
+        cache = (xhat,gamma,x_zero_center,inv_batch_std,batch_std,batch_var,eps)
+
+        
+        running_mean = momentum * running_mean + (1 - momentum) * batch_mean
+        running_var = momentum * running_var + (1 - momentum) * (batch_std ** 2)
+        
 
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
         #######################################################################
@@ -217,8 +246,10 @@ def batchnorm_forward(x, gamma, beta, bn_param):
         # Store the result in the out variable.                               #
         #######################################################################
         # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-
-        pass
+       
+        x = (x - running_mean) / (np.sqrt(running_var) + eps)
+        
+        out = gamma * x + beta
 
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
         #######################################################################
@@ -259,8 +290,38 @@ def batchnorm_backward(dout, cache):
     # might prove to be helpful.                                              #
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-
-    pass
+    N, D = dout.shape
+    
+    xhat,gamma,x_zero_center,inv_batch_std,batch_std,batch_var,eps = cache
+    
+    dbeta = dout.sum(axis=0)
+    
+    dgamma = np.sum(xhat * dout,axis=0)
+    
+    d_x_hat = dout * gamma
+    
+    d_inv_batch_std = np.sum( d_x_hat * x_zero_center ,axis=0)
+    
+    d_x_zero_center = d_x_hat * inv_batch_std
+    
+    d_batch_std = d_inv_batch_std * (-1 / (batch_std ** 2))
+    
+    d_batch_var = 0.5 * inv_batch_std * d_batch_std
+    
+    one_mat = np.ones((N,D))
+    
+    dsq = (1/N) * one_mat * d_batch_var
+    
+    d_x_zero_center2 = 2 * x_zero_center * dsq
+    
+    d_mean = -1 * np.sum(d_x_zero_center + d_x_zero_center2, axis=0)
+    
+    dx1 = d_x_zero_center + d_x_zero_center2
+    
+    dx2 = (1/N) * one_mat * d_mean
+    
+    dx = dx1 + dx2
+      
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
