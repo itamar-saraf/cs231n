@@ -173,6 +173,7 @@ def batchnorm_forward(x, gamma, beta, bn_param):
     mode = bn_param['mode']
     eps = bn_param.get('eps', 1e-5)
     momentum = bn_param.get('momentum', 0.9)
+    axis = bn_param.get('axis', 0)
 
     N, D = x.shape
     running_mean = bn_param.get('running_mean', np.zeros(D, dtype=x.dtype))
@@ -207,31 +208,25 @@ def batchnorm_forward(x, gamma, beta, bn_param):
         
         #step1: calculate mean
         batch_mean = x.mean(axis=0)
-        
-        #step2: subtract mean vector of every trainings example
-        x_zero_center = x - batch_mean     
-
-        #step3: calculate variance
-        batch_var = x.var(axis=0)
-
-        #step4: add eps for numerical stability, then sqrt
-        batch_std = np.sqrt(batch_var + eps)
-
-        #step5: invert batch_std
-        inv_batch_std = 1./batch_std
-
-        #step6: execute normalization
-        xhat = x_zero_center * inv_batch_std
-
-        #step7: scale and shift the normalized data using gamma and beta
-        out = gamma * xhat + beta
+        #step2: calculate variance
+        batch_var = x.var(axis=0) + eps
+        #step3: add eps for numerical stability, then sqrt
+        batch_std = np.sqrt(batch_var)
+        #step4: zero score
+        z_score = (x - batch_mean)/batch_std
+        #step5: scale and shift the normalized data using gamma and beta
+        out = gamma * z_score + beta
+        if axis == 0 or axis is None:
+           # running weighted average
+            running_mean = momentum * running_mean + (1 - momentum) * batch_mean
+            running_var = momentum * running_var + (1 - momentum) * (batch_std ** 2)
+            axis=0
 
         #store intermediate
-        cache = (xhat,gamma,x_zero_center,inv_batch_std,batch_std,batch_var,eps)
+        cache = (x, batch_mean, batch_std, gamma, z_score, batch_var, axis)
 
         
-        running_mean = momentum * running_mean + (1 - momentum) * batch_mean
-        running_var = momentum * running_var + (1 - momentum) * (batch_std ** 2)
+        
         
 
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
@@ -261,7 +256,7 @@ def batchnorm_forward(x, gamma, beta, bn_param):
     # Store the updated running means back into bn_param
     bn_param['running_mean'] = running_mean
     bn_param['running_var'] = running_var
-
+    
     return out, cache
 
 
@@ -292,35 +287,23 @@ def batchnorm_backward(dout, cache):
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     N, D = dout.shape
     
-    xhat,gamma,x_zero_center,inv_batch_std,batch_std,batch_var,eps = cache
+    x, batch_mean, batch_std, gamma, z_score, batch_var, axis = cache
     
-    dbeta = dout.sum(axis=0)
+    dbeta = dout.sum(axis=axis)
+    dgamma = np.sum(dout * z_score,axis=axis)
     
-    dgamma = np.sum(xhat * dout,axis=0)
     
-    d_x_hat = dout * gamma
+    dfdz = dout * gamma
     
-    d_inv_batch_std = np.sum( d_x_hat * x_zero_center ,axis=0)
-    
-    d_x_zero_center = d_x_hat * inv_batch_std
-    
-    d_batch_std = d_inv_batch_std * (-1 / (batch_std ** 2))
-    
-    d_batch_var = 0.5 * inv_batch_std * d_batch_std
-    
-    one_mat = np.ones((N,D))
-    
-    dsq = (1/N) * one_mat * d_batch_var
-    
-    d_x_zero_center2 = 2 * x_zero_center * dsq
-    
-    d_mean = -1 * np.sum(d_x_zero_center + d_x_zero_center2, axis=0)
-    
-    dx1 = d_x_zero_center + d_x_zero_center2
-    
-    dx2 = (1/N) * one_mat * d_mean
-    
-    dx = dx1 + dx2
+    dudx = 1/N                                                  
+    dvdx = 2/N * (x - batch_mean)                     
+    dzdx = 1 / batch_std                                      
+    dzdu = -1 / batch_std                                      
+    dzdv = -0.5*(batch_var**-1.5)*(x-batch_mean) 
+    dvdu = -2/N * np.sum(x - batch_mean, axis=0)
+
+    dx = dfdz*dzdx + np.sum(dfdz*dzdu,axis=0)*dudx + \
+         np.sum(dfdz*dzdv,axis=0)*(dvdx+dvdu*dudx)
       
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
@@ -356,12 +339,23 @@ def batchnorm_backward_alt(dout, cache):
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-    pass
+    N, D = dout.shape
+    
+    x, batch_mean, batch_std, gamma, z_score, batch_var, axis = cache
+    
+    dbeta = dout.sum(axis=axis)
+    dgamma = np.sum(dout * z_score,axis=axis)
+    
+    dfdz = dout * gamma 
+    dfdz_sum = np.sum(dfdz,axis=0)
+    
+    dx = (dfdz - dfdz_sum/N - np.sum(dfdz * z_score,axis=0) * z_score/N)/batch_std
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
+   
 
     return dx, dgamma, dbeta
 
@@ -401,9 +395,12 @@ def layernorm_forward(x, gamma, beta, ln_param):
     # the batch norm code and leave it almost unchanged?                      #
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-
-    pass
-
+    ln_param['mode'] = 'train'
+    ln_param['axis'] = 1
+    
+    out, cache = batchnorm_forward(x.T, gamma.reshape(-1,1), beta.reshape(-1,1), ln_param)
+    out = out.T
+    
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
     #                             END OF YOUR CODE                            #
@@ -436,9 +433,12 @@ def layernorm_backward(dout, cache):
     # still apply!                                                            #
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-
-    pass
-
+    
+    dx, dgamma, dbeta = batchnorm_backward_alt(dout.T, cache)
+    dx = dx.T
+    dgamma = dgamma.reshape(1,-1)
+    dbeta = dbeta.reshape(1,-1)
+    
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
     #                             END OF YOUR CODE                            #
@@ -485,8 +485,8 @@ def dropout_forward(x, dropout_param):
         # Store the dropout mask in the mask variable.                        #
         #######################################################################
         # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-
-        pass
+        mask = (np.random.rand(*x.shape) < p) / p #  dropout mask. Notice /p!
+        out = x * mask # drop!
 
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
         #######################################################################
@@ -498,7 +498,7 @@ def dropout_forward(x, dropout_param):
         #######################################################################
         # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-        pass
+        out = x
 
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
         #######################################################################
@@ -520,8 +520,8 @@ def dropout_backward(dout, cache):
     - cache: (dropout_param, mask) from dropout_forward.
     """
     dropout_param, mask = cache
-    mode = dropout_param['mode']
-
+    mode = dropout_param['mode']   
+    
     dx = None
     if mode == 'train':
         #######################################################################
@@ -529,7 +529,7 @@ def dropout_backward(dout, cache):
         #######################################################################
         # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-        pass
+        dx = dout * mask
 
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
         #######################################################################
@@ -575,8 +575,21 @@ def conv_forward_naive(x, w, b, conv_param):
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-    pass
-
+    N, C, H, W = x.shape
+    F, C, HH, WW = w.shape
+    stride = conv_param['stride']
+    pad = conv_param['pad']
+    
+  
+    outH = int(1 + (((H - HH) + (2 * pad) ) / stride))
+    outW = int(1 + (((W - WW) + (2 * pad)) / stride))
+  
+    out = np.zeros((N, F, outH, outW))
+    
+    
+    
+    
+    
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
     #                             END OF YOUR CODE                            #
