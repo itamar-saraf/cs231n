@@ -576,25 +576,40 @@ def conv_forward_naive(x, w, b, conv_param):
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
     N, C, H, W = x.shape
-    F, C, HH, WW = w.shape
+    F, C, Fh, Fw = w.shape
     stride = conv_param['stride']
     pad = conv_param['pad']
     
   
-    outH = int(1 + (((H - HH) + (2 * pad) ) / stride))
-    outW = int(1 + (((W - WW) + (2 * pad)) / stride))
+    outH = int(((H - Fh) + (2 * pad) ) / stride + 1)
+    outW = int(((W - Fw) + (2 * pad) ) / stride + 1)
   
     out = np.zeros((N, F, outH, outW))
     
-    
-    
-    
+    x_padded = np.pad(x, ((0,0),(0,0),(pad,pad),(pad,pad)), 'constant')
+
+
+    N, C, H_padded, W_padded = x_padded.shape
+
+
+    W_row = w.reshape(F, C * Fh * Fw)
+
+    X_col = np.zeros((Fh * Fw * C, outH * outW))
+
+    for n in range(N):
+      receptive_field = 0
+      for h_index in range(0, H_padded - Fh + 1, stride):
+         for w_index in range(0, W_padded - Fw + 1, stride):
+            X_col[:, receptive_field] = x_padded[n, :, h_index:h_index+Fh, 
+            w_index:w_index+Fw].reshape(Fh * Fw * C)
+            receptive_field += 1
+      out[n] = (np.dot(W_row, X_col) + b.reshape(F,1)).reshape(F, outH, outW)
     
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
-    cache = (x, w, b, conv_param)
+    cache = (x_padded, w, b, conv_param)
     return out, cache
 
 
@@ -617,7 +632,41 @@ def conv_backward_naive(dout, cache):
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-    pass
+    x_pad, w, b, conv_param = cache
+    N, F, outH, outW = dout.shape
+    N, C, Hpad, Wpad = x_pad.shape
+    FH, FW = w.shape[2], w.shape[3]
+    stride = conv_param['stride']
+    pad = conv_param['pad']
+
+    # initialize gradients
+    dx = np.zeros((N, C, Hpad - 2*pad, Wpad - 2*pad))
+    dw, db = np.zeros(w.shape), np.zeros(b.shape)
+
+    # create w_row matrix
+    w_row = w.reshape(F, C*FH*FW)                            #[F x C*FH*FW]
+
+    # create x_col matrix with values that each neuron is connected to
+    x_col = np.zeros((C*FH*FW, outH*outW))                   #[C*FH*FW x H'*W']
+    for index in range(N):
+        out_col = dout[index].reshape(F, outH*outW)          #[F x H'*W']
+        w_out = w_row.T.dot(out_col)                         #[C*FH*FW x H'*W']
+        dx_cur = np.zeros((C, Hpad, Wpad))
+        neuron = 0
+        for i in range(0, Hpad-FH+1, stride):
+            for j in range(0, Wpad-FW+1, stride):
+                dx_cur[:,i:i+FH,j:j+FW] += w_out[:,neuron].reshape(C,FH,FW)
+                x_col[:,neuron] = x_pad[index,:,i:i+FH,j:j+FW].reshape(C*FH*FW)
+                neuron += 1
+        dx[index] = dx_cur[:,pad:-pad, pad:-pad]
+        dw += out_col.dot(x_col.T).reshape(F,C,FH,FW)
+        db += out_col.sum(axis=1)
+
+
+
+
+
+
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
@@ -651,7 +700,25 @@ def max_pool_forward_naive(x, pool_param):
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-    pass
+    N, C, H, W = x.shape
+
+    pool_height = pool_param['pool_height']
+    pool_width = pool_param['pool_width']
+    stride = pool_param['stride']
+
+    H_out = int(1 + (H - pool_height) / stride)
+    W_out = int(1 + (W - pool_width) / stride)
+
+
+    out = np.zeros((N, C, H_out, W_out))
+    for i in range(N):
+      for c in range(C):
+
+        for h_index, h in enumerate(range(0, H - pool_height + 1, stride)):
+          for w_index, w in enumerate(range(0, W - pool_width + 1, stride)):
+            out[i, c, h_index, w_index] = np.max(x[i, c, h:h+pool_height, w:w+pool_width])
+            
+
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
