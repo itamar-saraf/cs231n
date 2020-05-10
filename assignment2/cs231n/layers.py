@@ -744,8 +744,31 @@ def max_pool_backward_naive(dout, cache):
     # TODO: Implement the max-pooling backward pass                           #
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
+    x, pool_param = cache
+    pool_height = pool_param['pool_height']
+    pool_width = pool_param['pool_width']
+    stride = pool_param['stride']
+    N, C, H, W = x.shape
+    _, _, doutH, doutW = dout.shape
 
-    pass
+    dx = np.zeros_like(x)
+    for n in range(N):
+      dout_row = dout[n].reshape(C, doutH * doutW)
+      rf = 0
+      for h_index in range(0, H - pool_height + 1, stride):
+        for w_index in range(0, W - pool_width + 1, stride):
+          pooling_area = x[n, :, h_index:h_index+pool_height, w_index:w_index+pool_width].reshape(C, pool_height*pool_width)
+          max_pool_area_indices = pooling_area.argmax(axis=1)
+
+          dout_area = dout_row[:, rf]
+          rf += 1
+
+          dpool_region = np.zeros_like(pooling_area)
+
+          dpool_region[np.arange(C), max_pool_area_indices] = dout_area
+
+          dx[n, :, h_index:h_index+pool_height, w_index:w_index+pool_width] += dpool_region.reshape(C, pool_height, pool_width)
+
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
@@ -786,8 +809,11 @@ def spatial_batchnorm_forward(x, gamma, beta, bn_param):
     # Your implementation should be very short; ours is less than five lines. #
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-
-    pass
+    
+    N, C, H, W = x.shape
+    x_channel = np.transpose(x, (0 , 2, 3, 1)).reshape(N*H*W, C)
+    x_channel, cache = batchnorm_forward(x_channel, gamma, beta, bn_param)
+    out = x_channel.reshape(N, H, W, C).transpose(0, 3, 1, 2)
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
@@ -821,7 +847,11 @@ def spatial_batchnorm_backward(dout, cache):
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-    pass
+    N, C, H, W = dout.shape
+    dout_trans = np.transpose(dout, (0 , 2, 3, 1)).reshape(N*H*W, C)
+    dx, dgamma, dbeta = batchnorm_backward_alt(dout_trans, cache)
+    dx = dx.reshape(N, H, W, C).transpose(0, 3, 1, 2)
+
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
@@ -861,8 +891,48 @@ def spatial_groupnorm_forward(x, gamma, beta, G, gn_param):
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-    pass
+    N, C, H, W = x.shape
+    x = np.reshape(x, (N*G, C//G*H*W))# reshape NxCxHxW ==> N*GxC/GxHxW =N1*C1 (N1>N*Groups)
+    
+    sample_mean= np.mean(x,axis=1, keepdims= True) # 4 , sum through D
 
+    #Step2: Calculate variance
+    #Step2.1: Minus mean
+    minus_mean= x- sample_mean# 4×60
+    # print (‘minus_mean shape’,minus_mean.shape)
+    #Step2.2 square each of the std
+    minus_mean_hat= minus_mean**2# 4×60
+
+    #Step 2.3 each data variance, average std from each data
+    sample_var= np.mean(minus_mean_hat, axis=1,keepdims= True)#4×1 #Nx1
+    # print (‘sample_var shape’,sample_var.shape)
+    #Step 3: Normalize
+    #Step 3.1: squrt the mini-batch variance and add numerical stable
+    sqrt_sample_var= np.sqrt(sample_var+eps)#4×1 Nx1
+    # print (‘sqrt_sample_var shape’,sqrt_sample_var.shape)
+    #Step3.2: divide the step 3.1 (1/x)
+    inv_sqrt_var= 1/sqrt_sample_var #4×1
+
+    #Step 3.3: Calculate normalize
+    normalize=minus_mean*inv_sqrt_var #4×60=[4×60]x[4×1]
+    # print (‘normalize shape’,normalize.shape)
+    #Step 4: Scale and shift
+    #GroupNormailize_Step2:
+    #****************** Different between Group Normalize ang Layer Normalize***********
+    #Reshape output again to original N*GxC/G*H*W –>NxCxHxW. Thus, gamma, beta can use for C class
+    normalize= np.reshape(normalize,(N,C,H,W))
+    # print (‘normalize modifed shape’,normalize.shape)
+    #Step 4.1: Scale the stds
+    scale= gamma*normalize #[N1xC1xH1xW1]2x6x4x5 = [1,6,1,1] x [2,6,4,5]
+    # print (‘gamma shape’,gamma.shape)
+    # print (‘normalize_groupNormanlize shape’,normalize_groupNormanlize.shape)
+    # print (‘scale shape’,scale.shape)
+    #Step 4.2 : shift – move the means
+    out= scale+ beta # 2x6x4x5=2x6x4x5 + 1x6x1x1
+    # print (‘out shape’,out.shape)
+    # Cache is defined based on backward, which infor want to use
+    # print (‘normalize shape final’,normalize.shape)
+    cache=[normalize,gamma,minus_mean,inv_sqrt_var,sqrt_sample_var,sample_var,eps,G]
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
     #                             END OF YOUR CODE                            #
@@ -883,6 +953,8 @@ def spatial_groupnorm_backward(dout, cache):
     - dgamma: Gradient with respect to scale parameter, of shape (C,)
     - dbeta: Gradient with respect to shift parameter, of shape (C,)
     """
+
+    
     dx, dgamma, dbeta = None, None, None
 
     ###########################################################################
@@ -890,8 +962,67 @@ def spatial_groupnorm_backward(dout, cache):
     # This will be extremely similar to the layer norm implementation.        #
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
+    normalize,gamma,minus_mean,inv_sqrt_var,sqrt_sample_var,sample_var,eps,G= cache
+    N1, C1, H1, W1= dout.shape
+    #Group_Normalize_Backward Step1:
+    # Input NxCxHxW –> find gama, beta
 
-    pass
+    #Group_Normalize_Backward Step2:
+    # transform NxCxHxW –> N1xD1 to use the cache (intermediate value in forward) to find out gradient int input dx
+
+    #Group_Normalize_Backward Step3: reshape dx into orginal input N1xD1 -> NxCxHxW
+    # print (‘dout.shape:’,dout.shape)
+    #Group_Normalize_Backward Step1:
+    #dbeta
+    dbeta= np.sum(dout,axis=(0,2,3),keepdims=True) #1xCx1x1
+    # print (‘dbeta.shape:’,dbeta.shape)
+
+    dscale= dout # N1xC1xH1xW1
+    # print (‘dscale.shape:’,dscale.shape)
+    # print (‘normalize.shape:’,normalize.shape)
+    # Step 8: cache normalize, gamma
+    dgamma= np.sum(dscale*normalize,axis=(0,2,3),keepdims=True) # N=sum_through_D,W,H([N1xC1xH1xW1]xN1xC1xH1xW1)
+    # print (‘dgamma’,dgamma.shape)
+
+    dnormalize= dscale*gamma# N1xC1xH1xW1= [N1xC1xH1xW1] x[1xC1x1x1]
+    # print (‘dscale’,dscale.shape)
+    # print (‘gamma’,gamma.shape)
+    #Group_Normalize_Backward Step2:
+    #Reshape dnormalize N1xC1xH1xW1 ==> N*GxC/GxHxW =N1xD1, all of caches are stored with input N1xD
+    dnormalize= np.reshape(dnormalize,(N1*G,C1//G*H1*W1))
+    N,D= dnormalize.shape
+
+    #Step 7: cache minus_mean, inv_sqrt_var
+    dinv_sqrt_var= np.sum(dnormalize*minus_mean,axis=1, keepdims=True)# N=sum_through_D([NxD].*[NxD]) =4×60
+    dminus_mean1= dnormalize*inv_sqrt_var #[NxD]=[NxD]x[Nx1]
+
+    #Step6: cache: sqrt_sample_var
+    dsqrt_sample_var=dinv_sqrt_var* (-1/(sqrt_sample_var**2)) # N= N x [N]
+
+    #Step5: cache: sample_var, eps
+    dsample_var= 0.5*(1/np.sqrt(sample_var + eps))*dsqrt_sample_var # N = [N+const]xN
+
+    #Step4: cache
+    dminus_mean_hat= (1/D)*np.ones((N,D))*dsample_var # NxD= NxD *N
+
+    #Step3: cache: minus_mean
+    dminus_mean2= 2*minus_mean*dminus_mean_hat # [NxD]=[NxD]*[NxD]
+
+    #Step2:cache
+    dx1= dminus_mean1+dminus_mean2 # [NxD] = [NxD] + [NxD]
+    dsample_mean= -1* np.sum((dminus_mean1+dminus_mean2), axis=1,keepdims= True) # N = sum_through_D[NxD]
+
+    #Step1: cache
+    dx2= (1/D)* np.ones((N,D))*dsample_mean # NxD = [NxD]XN
+
+    # Step0:
+    dx=dx1+dx2 #NxD (N= N1*Groups)
+    #Reshape dx, dgama,dbeta
+    #Group_Normalize_Backward Step3:
+    dx=np.reshape(dx,(N1, C1, H1, W1))
+    
+
+
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
